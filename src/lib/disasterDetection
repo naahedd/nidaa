@@ -1,0 +1,118 @@
+export class DisasterDetector {
+  private static instance: DisasterDetector;
+  private isMonitoring: boolean = false;
+  private eventTimes: Map<SensorType, number> = new Map();
+  private readonly EVENT_WINDOW = 5000; // 5 seconds in milliseconds
+
+  // Thresholds for different sensors
+  private readonly ACCELERATION_THRESHOLD = 20;
+  private readonly ROTATION_THRESHOLD = 15;
+  private readonly PRESSURE_THRESHOLD = 5;
+
+  private constructor() {
+    if ('DeviceMotionEvent' in window) {
+      window.addEventListener('devicemotion', this.handleMotion.bind(this));
+    }
+    if ('DeviceOrientationEvent' in window) {
+      window.addEventListener('deviceorientation', this.handleOrientation.bind(this));
+    }
+  }
+
+  static getInstance(): DisasterDetector {
+    if (!DisasterDetector.instance) {
+      DisasterDetector.instance = new DisasterDetector();
+    }
+    return DisasterDetector.instance;
+  }
+
+  startDetection() {
+    if (this.isMonitoring) return;
+    this.isMonitoring = true;
+    this.requestSensorPermissions();
+  }
+
+  stopDetection() {
+    this.isMonitoring = false;
+    this.eventTimes.clear();
+  }
+
+  private async requestSensorPermissions() {
+    try {
+      // Request device motion/orientation permissions
+      if ('requestPermission' in DeviceMotionEvent) {
+        await (DeviceMotionEvent as any).requestPermission();
+      }
+      if ('requestPermission' in DeviceOrientationEvent) {
+        await (DeviceOrientationEvent as any).requestPermission();
+      }
+    } catch (error) {
+      console.error('Failed to get sensor permissions:', error);
+    }
+  }
+
+  private handleMotion(event: DeviceMotionEvent) {
+    if (!this.isMonitoring) return;
+
+    const acceleration = event.accelerationIncludingGravity;
+    if (!acceleration) return;
+
+    const magnitude = Math.sqrt(
+      Math.pow(acceleration.x || 0, 2) +
+      Math.pow(acceleration.y || 0, 2) +
+      Math.pow(acceleration.z || 0, 2)
+    );
+
+    if (magnitude > this.ACCELERATION_THRESHOLD) {
+      this.eventTimes.set(SensorType.acceleration, Date.now());
+      this.checkForDisaster();
+    }
+  }
+
+  private handleOrientation(event: DeviceOrientationEvent) {
+    if (!this.isMonitoring) return;
+
+    const rotation = Math.abs(event.beta || 0) + Math.abs(event.gamma || 0);
+    
+    if (rotation > this.ROTATION_THRESHOLD) {
+      this.eventTimes.set(SensorType.rotation, Date.now());
+      this.checkForDisaster();
+    }
+  }
+
+  private checkForDisaster() {
+    const currentTime = Date.now();
+    
+    // Need at least 2 different sensor events
+    if (this.eventTimes.size < 2) return;
+
+    // Check if all events occurred within the time window
+    const allRecent = Array.from(this.eventTimes.values())
+      .every(time => currentTime - time <= this.EVENT_WINDOW);
+
+    if (allRecent) {
+      this.onDisasterDetected();
+      this.eventTimes.clear();
+    }
+  }
+
+  private onDisasterDetected() {
+    // Notify service worker
+    if ('serviceWorker' in navigator && navigator.serviceWorker.controller) {
+      navigator.serviceWorker.controller.postMessage({
+        type: 'DISASTER_DETECTED',
+        timestamp: Date.now()
+      });
+    }
+  }
+
+  destroy() {
+    this.stopDetection();
+    window.removeEventListener('devicemotion', this.handleMotion.bind(this));
+    window.removeEventListener('deviceorientation', this.handleOrientation.bind(this));
+  }
+}
+
+enum SensorType {
+  acceleration = 'acceleration',
+  rotation = 'rotation'
+}
